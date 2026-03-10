@@ -1,4 +1,4 @@
-"""MCP server exposing the gws (Google Workspace CLI) to Claude Desktop."""
+"""MCP server exposing the gws (Google Workspace CLI) to any MCP client."""
 
 import asyncio
 import json
@@ -63,7 +63,39 @@ mcp = FastMCP(
 )
 
 
-async def _run_gws(args: list[str], timeout: int = TIMEOUT) -> dict | str:
+def _parse_output(text: str) -> dict | list | str:
+    """Parse gws output as JSON, NDJSON, or raw text."""
+    text = text.strip()
+    if not text:
+        return {"result": "Command completed with no output."}
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # NDJSON (one JSON object per line, from --page-all)
+    results = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            results.append(json.loads(line))
+        except json.JSONDecodeError:
+            if results:
+                results.append({"_warning": "Remaining output was not valid JSON", "raw": line})
+                return results
+            return text
+    return results if results else text
+
+
+def _make_error(message: str, **extra) -> dict:
+    """Build a standardised error response."""
+    return {"error": True, "message": message, **extra}
+
+
+async def _run_gws(args: list[str], timeout: int = TIMEOUT) -> dict | list | str:
     """Run the gws binary safely via asyncio subprocess (no shell)."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -71,10 +103,18 @@ async def _run_gws(args: list[str], timeout: int = TIMEOUT) -> dict | str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+    except OSError as exc:
+        return _make_error(f"Failed to start gws: {exc}")
+
+    try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
-        return {"error": True, "message": f"Command timed out after {timeout}s"}
+        try:
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        return _make_error(f"Command timed out after {timeout}s")
 
     out = stdout.decode("utf-8", errors="replace")[:MAX_OUTPUT]
     err = stderr.decode("utf-8", errors="replace").strip()
@@ -83,32 +123,19 @@ async def _run_gws(args: list[str], timeout: int = TIMEOUT) -> dict | str:
         for text in (err, out):
             if text:
                 try:
-                    return json.loads(text)
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict):
+                        parsed.setdefault("error", True)
+                        parsed.setdefault("exit_code", proc.returncode)
+                        return parsed
+                    return _make_error(
+                        "Command failed", exit_code=proc.returncode, detail=parsed,
+                    )
                 except json.JSONDecodeError:
                     pass
-        return {"error": True, "exit_code": proc.returncode, "stderr": err or out}
+        return _make_error(err or out, exit_code=proc.returncode)
 
-    out = out.strip()
-    if not out:
-        return {"result": "OK (empty response)"}
-
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        pass
-
-    # NDJSON (one JSON object per line, from --page-all)
-    lines = out.split("\n")
-    results = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            results.append(json.loads(line))
-        except json.JSONDecodeError:
-            return out  # Not JSON at all, return raw text
-    return results if results else out
+    return _parse_output(out)
 
 
 @mcp.tool()
@@ -144,8 +171,35 @@ async def gws_schema(method: str) -> dict | str:
 
     Use this to understand exactly what parameters a method accepts before calling it.
     """
-    result = await _run_gws(["schema", method, "--resolve-refs"])
-    return result
+    return await _run_gws(["schema", method, "--resolve-refs"])
+
+
+def _build_service_command(
+    service: str,
+    args: list[str],
+    params: dict | None,
+    json_body: dict | None,
+    extra_flags: list[str] | None = None,
+) -> list[str] | dict:
+    """Build a validated gws command list, or return an error dict."""
+    if service not in SERVICES:
+        return _make_error(f"Unknown service '{service}'. Use gws_services() to list valid services.")
+
+    # Check user-controlled flags before appending serialized JSON values
+    user_flags = [*args, *(extra_flags or [])]
+    for flag in BLOCKED_FLAGS:
+        if flag in user_flags:
+            return _make_error(f"Flag '{flag}' is not allowed through MCP.")
+
+    cmd = [service, *args, "--format", "json"]
+    if extra_flags:
+        cmd += extra_flags
+    if params:
+        cmd += ["--params", json.dumps(params)]
+    if json_body:
+        cmd += ["--json", json.dumps(json_body)]
+
+    return cmd
 
 
 @mcp.tool()
@@ -163,20 +217,9 @@ async def gws_dry_run(
         params: URL/query parameters as a dict, e.g. {"fileId": "abc", "fields": "name,id"}
         json_body: Request body for POST/PATCH/PUT methods
     """
-    if service not in SERVICES:
-        return {"error": True, "message": f"Unknown service '{service}'. Use gws_services() to list valid services."}
-
-    cmd = [service] + list(args) + ["--dry-run", "--format", "json"]
-
-    if params:
-        cmd += ["--params", json.dumps(params)]
-    if json_body:
-        cmd += ["--json", json.dumps(json_body)]
-
-    for flag in BLOCKED_FLAGS:
-        if flag in cmd:
-            return {"error": True, "message": f"Flag '{flag}' is not allowed through MCP."}
-
+    cmd = _build_service_command(service, args, params, json_body, ["--dry-run"])
+    if isinstance(cmd, dict):
+        return cmd
     return await _run_gws(cmd)
 
 
@@ -199,22 +242,10 @@ async def gws_run(
         page_all: Auto-paginate through all pages (returns NDJSON)
         page_limit: Maximum pages to fetch when page_all is True (default 10, max 50)
     """
-    if service not in SERVICES:
-        return {"error": True, "message": f"Unknown service '{service}'. Use gws_services() to list valid services."}
-
-    cmd = [service] + list(args) + ["--format", "json"]
-
-    if params:
-        cmd += ["--params", json.dumps(params)]
-    if json_body:
-        cmd += ["--json", json.dumps(json_body)]
-    if page_all:
-        cmd += ["--page-all", "--page-limit", str(min(page_limit, 50))]
-
-    for flag in BLOCKED_FLAGS:
-        if flag in cmd:
-            return {"error": True, "message": f"Flag '{flag}' is not allowed through MCP."}
-
+    extra = ["--page-all", "--page-limit", str(min(page_limit, 50))] if page_all else None
+    cmd = _build_service_command(service, args, params, json_body, extra)
+    if isinstance(cmd, dict):
+        return cmd
     return await _run_gws(cmd)
 
 
