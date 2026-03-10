@@ -1,6 +1,6 @@
 # gws-mcp
 
-MCP server that exposes the [Google Workspace CLI](https://github.com/nicholasgasior/gws) (`gws`) to Claude Desktop — giving Claude full access to **19 Google Workspace services** via 5 generic tools.
+MCP server that exposes the [Google Workspace CLI](https://github.com/googleworkspace/cli) (`gws`) to any MCP-compatible client, giving them full access to **19 Google Workspace services** via 5 generic tools.
 
 ## Why?
 
@@ -21,7 +21,7 @@ Claude's built-in Google connectors cover **3 services** (Gmail, Calendar, Drive
 
 - **Python 3.10+**
 - **`mcp` package**: `pip install "mcp>=1.0.0"`
-- **`gws` CLI** installed and authenticated: `npm install -g @nicholasgasior/gws`
+- **[`gws` CLI](https://github.com/googleworkspace/cli)** installed and authenticated
 - **Node.js** (required by `gws`)
 
 Authenticate `gws` before first use:
@@ -41,26 +41,36 @@ gws auth login
    pip install "mcp>=1.0.0"
    ```
 
-3. **Configure Claude Desktop** — add to `claude_desktop_config.json`:
-   ```jsonc
-   {
-     "mcpServers": {
-       "gws": {
-         "command": "python3",
-         "args": ["/path/to/gws-mcp/server.py"],
-         "env": {
-           "HOME": "/Users/YOUR_USERNAME"
-         }
-       }
-     }
-   }
-   ```
+3. **Configure your MCP client** (see below).
 
-4. **Restart Claude Desktop.** The `gws` tools should appear in the tools menu.
+4. **Restart your client.** The 5 `gws_*` tools should appear.
 
-### nvm users
+## Client Setup
 
-Claude Desktop doesn't inherit nvm's PATH. Set explicit paths via env vars:
+The server uses **stdio transport**. It reads JSON-RPC from stdin and writes to stdout. Any MCP client that can launch a subprocess will work.
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json` (or open it via **Settings → Developer → Edit Config**):
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+```jsonc
+{
+  "mcpServers": {
+    "gws": {
+      "command": "python3",
+      "args": ["/path/to/gws-mcp/server.py"]
+    }
+  }
+}
+```
+
+If you use **nvm**, Claude Desktop won't inherit its PATH. Set explicit paths:
 
 ```jsonc
 {
@@ -69,7 +79,6 @@ Claude Desktop doesn't inherit nvm's PATH. Set explicit paths via env vars:
       "command": "python3",
       "args": ["/path/to/gws-mcp/server.py"],
       "env": {
-        "HOME": "/Users/YOUR_USERNAME",
         "GWS_NODE_PATH": "/Users/YOUR_USERNAME/.nvm/versions/node/v22.0.0/bin/node",
         "GWS_BIN_PATH": "/Users/YOUR_USERNAME/.nvm/versions/node/v22.0.0/bin/gws"
       }
@@ -77,6 +86,16 @@ Claude Desktop doesn't inherit nvm's PATH. Set explicit paths via env vars:
   }
 }
 ```
+
+### Any other MCP client
+
+The server speaks MCP over stdio. Launch it as:
+
+```bash
+python3 /path/to/gws-mcp/server.py
+```
+
+If your client's environment doesn't have `node` and `gws` on the PATH, set `GWS_NODE_PATH` and `GWS_BIN_PATH` environment variables before launching.
 
 ## Tools
 
