@@ -1,0 +1,16 @@
+{
+  "_comment": "Add this to your claude_desktop_config.json under mcpServers",
+  "mcpServers": {
+    "gws": {
+      "command": "python3",
+      "args": ["/path/to/gws-mcp/server.py"],
+      "env": {
+        "HOME": "/Users/YOUR_USERNAME",
+
+        "_comment_nvm": "Uncomment these if you use nvm (Claude Desktop doesn't inherit nvm PATH)",
+        "GWS_NODE_PATH": "/Users/YOUR_USERNAME/.nvm/versions/node/v22.0.0/bin/node",
+        "GWS_BIN_PATH": "/Users/YOUR_USERNAME/.nvm/versions/node/v22.0.0/bin/gws"
+      }
+    }
+  }
+}

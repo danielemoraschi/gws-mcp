@@ -1,0 +1,7 @@
+[project]
+name = "gws-mcp"
+version = "0.1.0"
+description = "MCP server exposing the Google Workspace CLI (gws) to Claude Desktop"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.0.0"]
