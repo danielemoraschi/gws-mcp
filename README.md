@@ -33,7 +33,7 @@ gws auth login
 
 1. **Clone this repo:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/gws-mcp.git
+   git clone https://github.com/danielemoraschi/gws-mcp
    ```
 
 2. **Install the MCP dependency:**
